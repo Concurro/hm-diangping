@@ -137,7 +137,6 @@ public class CacheClient {
             if (expireTime.isAfter(LocalDateTime.now())) {
                 return JSONUtil.toBean(dataJson, type);
             }
-
             log.debug("缓存已过期: {}", cacheKey);
             String lockKey = LOCK_SHOP_KEY + id;
             if (tryLack(lockKey)) {
@@ -189,7 +188,6 @@ public class CacheClient {
                         .opsForValue()
                         .setIfAbsent(k, "1", 10, TimeUnit.SECONDS));
     }
-
     // 释放锁
     private void unLock(String k) {
         stringRedisTemplate.delete(k);

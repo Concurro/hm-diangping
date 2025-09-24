@@ -1,19 +1,26 @@
 package com.hmdp;
 
 import com.hmdp.service.impl.ShopServiceImpl;
+import com.hmdp.utils.CacheClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import javax.annotation.Resource;
+import java.util.concurrent.TimeUnit;
+
+import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_KEY;
 
 @SpringBootTest
 class HmDianPingApplicationTests {
     @Resource
-    private ShopServiceImpl service;
+    private CacheClient cacheClient;
+
+    @Resource
+    private ShopServiceImpl shopService;
 
     @Test
     void testSaveShop(){
-        service.saveShopRedis(1L, 20L);
+        cacheClient.saveShopRedis(CACHE_SHOP_TYPE_KEY, 1, 30L, TimeUnit.SECONDS,shopService::getById);
     }
 
 }

@@ -10,9 +10,6 @@ import javax.annotation.Resource;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-
-import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_KEY;
 
 @SpringBootTest
 class HmDianPingApplicationTests {

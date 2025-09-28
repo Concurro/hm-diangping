@@ -41,8 +41,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private StringRedisTemplate sRedis;
 
 
-    private final Map<String, Object> locks = new ConcurrentHashMap<>();
-
     @Override
     public Result seckillVoucher(Long voucherId) {
         // 1. 验证秒杀时间

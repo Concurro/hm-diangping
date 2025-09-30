@@ -67,6 +67,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     private class voucherOrderHandler implements Runnable {
         @Override
+        @SuppressWarnings("all")
         public void run() {
             while (true) {
                 try {

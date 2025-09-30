@@ -9,19 +9,18 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
-import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
-import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.aop.framework.AopContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
 
 /**
  * <p>
@@ -42,31 +41,60 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private RedissonClient redissonClient;
 
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("script/seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Result seckillVoucher(Long voucherId) {
-        // 1. 验证秒杀时间
-        Result voucher = validateSeckillTime(voucherId);
-        if (!voucher.getSuccess()) {
-            return voucher;  // 直接返回错误信息
-        }
-        // 一人一单
-        // 获取专用锁对象
         Long userId = UserHolder.getUser().getId();
-        String lockKey = userId + ":" + voucherId;
-
-        RLock lock = redissonClient.getLock(lockKey);
-
-        var isLock = lock.tryLock();
-        if (!isLock) Result.fail("一个用户只能下一单!");
-
-        try {
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-            return proxy.getResult(voucherId);
-        } finally {
-            lock.unlock();
+        Long result = stringRedisTemplate.execute(SECKILL_SCRIPT, List.of(), voucherId.toString(), userId.toString());
+        int code = result.intValue();
+        if (code != 0) {
+            return switch (code) {
+                case 1 ->  Result.fail("库存不足");
+                case 2 ->  Result.fail("不能重复下单");
+                default ->  Result.fail("系统异常");
+            };
         }
+        long orderId = redisIdWorker.nextId("order:");
+
+
+        return Result.ok(0);
     }
+
+
+//    @Override
+//    public Result seckillVoucher(Long voucherId) {
+//        // 1. 验证秒杀时间
+//        Result voucher = validateSeckillTime(voucherId);
+//        if (!voucher.getSuccess()) {
+//            return voucher;  // 直接返回错误信息
+//        }
+//        // 一人一单
+//        // 获取专用锁对象
+//        Long userId = UserHolder.getUser().getId();
+//        String lockKey = userId + ":" + voucherId;
+//        RLock lock = redissonClient.getLock(lockKey);
+//        var isLock = lock.tryLock();
+//        if (!isLock) Result.fail("一个用户只能下一单!");
+//
+//        try {
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.getResult(voucherId);
+//        } finally {
+//            lock.unlock();
+//        }
+//    }
+
+
 
     @Transactional
     public Result getResult(Long voucherId) {
@@ -108,7 +136,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     private VoucherOrder createVoucherOrder(Long voucherId) {
         VoucherOrder voucherOrder = new VoucherOrder();
-        long orderId = redisIdWorker.nextId("order");
+        long orderId = redisIdWorker.nextId("order:");
         voucherOrder.setId(orderId);
         Long userId = UserHolder.getUser().getId();
         voucherOrder.setUserId(userId);

@@ -10,17 +10,23 @@ import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * <p>
@@ -42,15 +48,54 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private RedissonClient redissonClient;
 
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
-
     static {
         SECKILL_SCRIPT = new DefaultRedisScript<>();
         SECKILL_SCRIPT.setLocation(new ClassPathResource("script/seckill.lua"));
         SECKILL_SCRIPT.setResultType(Long.class);
     }
-
-    @Autowired
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    private final BlockingQueue<VoucherOrder> ordersTasks = new ArrayBlockingQueue<>(1024 * 1024);
+
+    private final static ExecutorService EXECUTOR_SERVICE = Executors.newSingleThreadExecutor();
+
+    @PostConstruct
+    private void init() {
+        EXECUTOR_SERVICE.submit(new voucherOrderHandler());
+    }
+
+    private class voucherOrderHandler implements Runnable {
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    VoucherOrder take = ordersTasks.take();
+                    handleVoucherOrder(take);
+                } catch (Exception e) {
+                    log.error("订单处理异常", e);
+                }
+            }
+        }
+    }
+
+    private void handleVoucherOrder(VoucherOrder voucherOrder) {
+        Long userId = voucherOrder.getUserId();
+        String lockKey = "lock:order:" + userId;
+        RLock lock = redissonClient.getLock(lockKey);
+        var isLock = lock.tryLock();
+        if (!isLock) {
+            log.error("获取锁失败");
+            return;
+        }
+        try {
+            proxy.getResult(voucherOrder);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private IVoucherOrderService proxy;
 
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -59,60 +104,40 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         int code = result.intValue();
         if (code != 0) {
             return switch (code) {
-                case 1 ->  Result.fail("库存不足");
-                case 2 ->  Result.fail("不能重复下单");
-                default ->  Result.fail("系统异常");
+                case 1 -> Result.fail("库存不足");
+                case 2 -> Result.fail("不能重复下单");
+                default -> Result.fail("系统异常");
             };
         }
+        var voucherOrder = new VoucherOrder();
         long orderId = redisIdWorker.nextId("order:");
+        voucherOrder.setId(orderId);
+        voucherOrder.setUserId(userId);
+        voucherOrder.setVoucherId(voucherId);
 
+        ordersTasks.add(voucherOrder);
 
-        return Result.ok(0);
+        proxy = (IVoucherOrderService) AopContext.currentProxy();
+        return Result.ok(orderId);
     }
-
-
-//    @Override
-//    public Result seckillVoucher(Long voucherId) {
-//        // 1. 验证秒杀时间
-//        Result voucher = validateSeckillTime(voucherId);
-//        if (!voucher.getSuccess()) {
-//            return voucher;  // 直接返回错误信息
-//        }
-//        // 一人一单
-//        // 获取专用锁对象
-//        Long userId = UserHolder.getUser().getId();
-//        String lockKey = userId + ":" + voucherId;
-//        RLock lock = redissonClient.getLock(lockKey);
-//        var isLock = lock.tryLock();
-//        if (!isLock) Result.fail("一个用户只能下一单!");
-//
-//        try {
-//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-//            return proxy.getResult(voucherId);
-//        } finally {
-//            lock.unlock();
-//        }
-//    }
-
 
 
     @Transactional
-    public Result getResult(Long voucherId) {
-        boolean isRepeat = checkOrderByID(voucherId);
+    public void getResult(VoucherOrder voucherOrder) {
+        boolean isRepeat = checkOrderByID(voucherOrder);
         if (isRepeat) {
-            return Result.fail("您已经抢购过一次了");
+            log.error("重复下单");
+            return;
         }
         // 2. 扣减库存
-        deductStock(voucherId);
+        deductStock(voucherOrder);
 
         // 3. 创建订单
-        VoucherOrder voucherOrder = createVoucherOrder(voucherId);
-        return Result.ok(voucherOrder.getId());
+        save(voucherOrder);
     }
 
-    private boolean checkOrderByID(Long voucherId) {
-        Long userId = UserHolder.getUser().getId();
-        int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
+    private boolean checkOrderByID(VoucherOrder voucherOrder) {
+        int count = query().eq("user_id", voucherOrder.getUserId()).eq("voucher_id", voucherOrder.getVoucherId()).count();
         return count != 0;
     }
 
@@ -127,8 +152,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         return Result.ok(voucher);
     }
 
-    private void deductStock(Long voucherId) {
-        int updatedRows = seckillVoucherMapper.deductStock(voucherId);
+    private void deductStock(VoucherOrder voucherOrder) {
+        int updatedRows = seckillVoucherMapper.deductStock(voucherOrder.getVoucherId());
         if (updatedRows != 1) {
             throw new RuntimeException("库存不足");
         }

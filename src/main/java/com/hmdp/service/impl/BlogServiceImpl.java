@@ -19,7 +19,6 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
 import javax.annotation.Resource;
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
 
@@ -120,5 +119,18 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
                 .toList();
         return Result.ok(users);
+    }
+
+    @Override
+    public Result queryBlogByUserId(Integer current, Long id) {
+        Page<Blog> page = query()
+                .eq("user_id", id)
+                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        List<Blog> records = page.getRecords();
+        records.forEach(blog -> {
+            this.queryBlogUser(blog);
+            this.isBlogLiked(blog);
+        });
+        return Result.ok(records);
     }
 }

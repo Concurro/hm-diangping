@@ -8,14 +8,14 @@ import com.hmdp.mapper.FollowMapper;
 import com.hmdp.service.IFollowService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.UserHolder;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.Resource;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * <p>
@@ -27,6 +27,9 @@ import java.util.stream.Collectors;
  */
 @Service
 public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> implements IFollowService {
+
+    @Resource
+    private StringRedisTemplate sRedis;
 
     private final UserServiceImpl userServiceImpl;
     private final JdbcTemplate jdbcTemplate;
@@ -50,7 +53,11 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
 
     private void cancelConcern(Long id) {
         Long userId = UserHolder.getUser().getId();
-        remove(new QueryWrapper<Follow>().eq("user_id", userId).eq("follow_user_id", id));
+        boolean remove = remove(new QueryWrapper<Follow>().eq("user_id", userId).eq("follow_user_id", id));
+        if (remove) {
+            // 删除Redis
+            sRedis.opsForSet().remove("follow:" + userId, id.toString());
+        }
     }
 
     private void concern(Long id) {
@@ -58,7 +65,11 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         Follow follow = new Follow();
         follow.setUserId(userId);
         follow.setFollowUserId(id);
-        save(follow);
+        boolean save = save(follow);
+        if (save) {
+            // 添加到Redis
+            sRedis.opsForSet().add("follow:" + userId, id.toString());
+        }
     }
 
     @Override
@@ -67,25 +78,30 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     }
 
     @Override
-    public Result followCommons(Long targetUserId) {
-        Long currentUserId = UserHolder.getUser().getId();
+    public Result followCommons(Long id) {
+//        Long currentUserId = UserHolder.getUser().getId();
+//
+//        String sql = "SELECT a.follow_user_id " +
+//                "FROM tb_follow a " +
+//                "JOIN tb_follow b ON a.follow_user_id = b.follow_user_id " +
+//                "WHERE a.user_id = ? AND b.user_id = ?";
+//
+//        // 使用可变参数形式
+//        List<Long> commonIds = jdbcTemplate.queryForList(
+//                sql,
+//                Long.class,  // 结果类型
+//                currentUserId, targetUserId  // 参数
+//        );
+//        if (commonIds.isEmpty()) return Result.ok(Collections.emptyList());
+//        List<UserDTO> commonUsers = userServiceImpl.query().in("id", commonIds).list().stream()
+//                .map(user -> new UserDTO(user.getId(), user.getNickName(), user.getIcon())).toList();
 
-        String sql = "SELECT a.follow_user_id " +
-                "FROM tb_follow a " +
-                "JOIN tb_follow b ON a.follow_user_id = b.follow_user_id " +
-                "WHERE a.user_id = ? AND b.user_id = ?";
+//        return Result.ok(commonUsers);
 
-        // 使用可变参数形式
-        List<Long> commonIds = jdbcTemplate.queryForList(
-                sql,
-                Long.class,  // 结果类型
-                currentUserId, targetUserId  // 参数
-        );
-        if (commonIds.isEmpty()) return Result.ok(Collections.emptyList());
-        List<UserDTO> commonUsers = userServiceImpl.query().in("id", commonIds).list().stream()
-                .map(user -> new UserDTO(user.getId(), user.getNickName(), user.getIcon())).toList();
-
-        return Result.ok(commonUsers);
+        Set<String> set = sRedis.opsForSet().intersect("follow:" + id, "follow:" + UserHolder.getUser().getId());
+        if (set == null || set.isEmpty()) return Result.ok(Collections.emptyList());
+        List<Long> idL = set.stream().map(Long::valueOf).toList();
+        return Result.ok(userServiceImpl.listByIds(idL).stream().map(user -> new UserDTO(user.getId(), user.getNickName(), user.getIcon())).toList());
     }
 
     private boolean isFollow_w(Long id) {

@@ -1,14 +1,31 @@
 package com.hmdp.service.impl;
 
+
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IBlogService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.service.IUserService;
+import com.hmdp.utils.SystemConstants;
+import com.hmdp.utils.UserHolder;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+
+import javax.annotation.Resource;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
 
 /**
  * <p>
- *  服务实现类
+ * 服务实现类
  * </p>
  *
  * @author 虎哥
@@ -17,4 +34,91 @@ import org.springframework.stereotype.Service;
 @Service
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IBlogService {
 
+    @Resource
+    private IUserService userService;
+
+    @Resource
+    private StringRedisTemplate sRedis;
+
+    @Override
+    public Result queryBlogById(Long id) {
+        Blog blog = getById(id);
+        if (blog == null) return Result.fail("笔记不存在");
+        queryBlogUser(blog);
+        // 查询blog是否被点赞
+        isBlogLiked(blog);
+        return Result.ok(blog);
+    }
+
+    private void isBlogLiked(Blog blog) {
+        String key = BLOG_LIKED_KEY + blog.getId();
+        UserDTO user = UserHolder.getUser();
+        if (user == null) return;
+        Long userId = user.getId();
+        Double score = sRedis.opsForZSet().score(key, userId.toString());
+        boolean isMember = score != null;
+        blog.setIsLike(isMember);
+    }
+
+    private void queryBlogUser(Blog blog) {
+        User user = userService.getById(blog.getUserId());
+        blog.setName(user.getNickName());
+        blog.setIcon(user.getIcon());
+    }
+
+    @Override
+    public Result queryHotBlog(Integer current) {
+        // 根据用户查询
+        Page<Blog> page = query()
+                .orderByDesc("liked")
+                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        // 获取当前页数据
+        List<Blog> records = page.getRecords();
+        // 查询用户
+        records.forEach(blog -> {
+            this.queryBlogUser(blog);
+            isBlogLiked(blog);
+        });
+
+        return Result.ok(records);
+    }
+
+    @Override
+    public Result likeBlog(Long id) {
+        String key = BLOG_LIKED_KEY + id;
+        UserDTO user = UserHolder.getUser();
+        if (user == null) return Result.fail("状态异常");
+        Long userId = user.getId();
+
+        Double score = sRedis.opsForZSet().score(key, userId.toString());
+        if (score == null) {
+            // 修改点赞数量
+            boolean update = update().setSql("liked = liked + 1").eq("id", id).update();
+            if (update) {
+                // 保存用户时间戳
+                sRedis.opsForZSet().add(key, userId.toString(), System.currentTimeMillis());
+            }
+        } else {
+            // 修改点赞数量
+            boolean update = update().setSql("liked = liked - 1").eq("id", id).update();
+            if (update) {
+                // 移除用户
+                sRedis.opsForZSet().remove(key, userId.toString());
+            }
+        }
+        return Result.ok("点赞成功");
+    }
+
+    @Override
+    public Result queryBlogLikes(Long id) {
+        Set<String> set = sRedis.opsForZSet().range(BLOG_LIKED_KEY + id, 0, 4);
+        if (set == null || set.isEmpty()) return Result.ok(Collections.emptyList());
+        List<Long> idL = set.stream().map(Long::valueOf).toList();
+        String ids = StrUtil.join(",", idL);
+        List<UserDTO> users = userService.query().in("id", idL).last("order by field(id," + ids + ")").list()
+                .stream()
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
+                .toList();
+        return Result.ok(users);
+    }
 }

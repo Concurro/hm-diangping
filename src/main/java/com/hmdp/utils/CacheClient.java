@@ -51,7 +51,7 @@ public class CacheClient {
         stringRedisTemplate.expire(key, time, unit);
     }
 
-    // 逻辑过期缓存
+    // 缓存穿透
     public <R, ID> R queryWithPassThrough(String keyPrefix, ID id, Class<R> type, Function<ID, R> db, Long time, TimeUnit unit) {
         // 1.缓存穿透
         String key = keyPrefix + id;

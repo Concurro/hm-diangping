@@ -14,7 +14,7 @@ public class RedissonConfig {
     public RedissonClient redissonClient() {
         var config = new Config();
         config.useSingleServer()
-                .setAddress("redis://192.168.0.2:6379")
+                .setAddress("redis://192.168.5.2:6379")
                 .setPassword("123456");
         return Redisson.create(config);
     }

@@ -37,7 +37,7 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
     public Result queryTypeList() {
         String json = stringRedisTemplate.opsForValue().get(CACHE_SHOP_TYPE_SORTED_KEY);
         if (StrUtil.isNotBlank(json)) {
-            log.debug("从redis中获取数据!");
+            // log.debug("从redis中获取数据!");
             List<ShopType> typeList = JSONUtil.toList(json, ShopType.class);
             return Result.ok(typeList);
         }

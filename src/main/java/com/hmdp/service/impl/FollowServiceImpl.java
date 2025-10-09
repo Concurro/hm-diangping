@@ -8,8 +8,8 @@ import com.hmdp.mapper.FollowMapper;
 import com.hmdp.service.IFollowService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.UserHolder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -32,11 +32,10 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     private StringRedisTemplate sRedis;
 
     private final UserServiceImpl userServiceImpl;
-    private final JdbcTemplate jdbcTemplate;
 
-    public FollowServiceImpl(UserServiceImpl userServiceImpl, JdbcTemplate jdbcTemplate) {
+    @Autowired
+    public FollowServiceImpl(UserServiceImpl userServiceImpl) {
         this.userServiceImpl = userServiceImpl;
-        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
@@ -79,25 +78,6 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
 
     @Override
     public Result followCommons(Long id) {
-//        Long currentUserId = UserHolder.getUser().getId();
-//
-//        String sql = "SELECT a.follow_user_id " +
-//                "FROM tb_follow a " +
-//                "JOIN tb_follow b ON a.follow_user_id = b.follow_user_id " +
-//                "WHERE a.user_id = ? AND b.user_id = ?";
-//
-//        // 使用可变参数形式
-//        List<Long> commonIds = jdbcTemplate.queryForList(
-//                sql,
-//                Long.class,  // 结果类型
-//                currentUserId, targetUserId  // 参数
-//        );
-//        if (commonIds.isEmpty()) return Result.ok(Collections.emptyList());
-//        List<UserDTO> commonUsers = userServiceImpl.query().in("id", commonIds).list().stream()
-//                .map(user -> new UserDTO(user.getId(), user.getNickName(), user.getIcon())).toList();
-
-//        return Result.ok(commonUsers);
-
         Set<String> set = sRedis.opsForSet().intersect("follow:" + id, "follow:" + UserHolder.getUser().getId());
         if (set == null || set.isEmpty()) return Result.ok(Collections.emptyList());
         List<Long> idL = set.stream().map(Long::valueOf).toList();
